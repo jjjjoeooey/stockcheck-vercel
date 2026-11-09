@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="noindex,nofollow">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0a101c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="StockCheck">
+<link rel="icon" href="/icon-192.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<title>StockCheck</title>
+<style>
+  :root { --bg:#0a101c; --panel:#111c2e; --line:rgba(148,163,184,.14); --text:#e6edf6; --muted:#8ea0b8; --accent:#22d3ee; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin:0; min-height:100%; background: radial-gradient(900px 500px at 50% -10%, #12213a 0%, var(--bg) 60%); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif; padding-top: env(safe-area-inset-top); }
+  .wrap { max-width: 520px; margin: 0 auto; padding: 18px 16px calc(24px + env(safe-area-inset-bottom)); }
+  .top { display:flex; align-items:baseline; justify-content:space-between; gap:10px; }
+  .name { font-size:24px; font-weight:800; letter-spacing:.5px; }
+  .code { color:var(--muted); font-size:12px; font-variant-numeric: tabular-nums; margin-top:3px; }
+  .big { display:flex; align-items:flex-end; gap:12px; margin:14px 0 6px; }
+  .total { font-size:64px; font-weight:800; line-height:1; font-variant-numeric: tabular-nums; }
+  .grade { font-size:13px; color:var(--muted); padding-bottom:8px; }
+  .chg { font-size:13px; padding-bottom:9px; font-variant-numeric: tabular-nums; }
+  .up { color:#f87171; } .down { color:#34d399; }
+  .tags { margin: 6px 0 14px; min-height: 20px; }
+  .tag { display:inline-block; font-size:11px; color:#9fd8e6; background:rgba(34,211,238,.09); border:1px solid rgba(34,211,238,.18);
+    border-radius:6px; padding:2px 7px; margin:0 5px 5px 0; }
+  .rows { display:flex; flex-direction:column; gap:10px; background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:16px 14px; }
+  .row { display:grid; grid-template-columns:64px 1fr 34px; align-items:center; gap:10px; }
+  .lbl { color:var(--muted); font-size:12.5px; }
+  .bar { height:7px; border-radius:6px; background:rgba(148,163,184,.15); overflow:hidden; }
+  .bar > i { display:block; height:100%; border-radius:6px; width:0; transition: width .35s; }
+  .val { text-align:right; font-weight:700; font-size:14px; font-variant-numeric: tabular-nums; }
+  .barrow { display:flex; gap:8px; margin-top:16px; }
+  .barrow input { flex:1; background:var(--panel); border:1px solid var(--line); border-radius:12px; color:var(--text);
+    padding:11px 12px; font-size:14px; outline:none; }
+  .barrow button { background:linear-gradient(135deg,#22d3ee,#34d399); color:#04121a; border:none; border-radius:12px;
+    padding:0 16px; font-weight:700; font-size:14px; }
+  .foot { display:flex; justify-content:space-between; align-items:center; margin-top:12px; color:var(--muted); font-size:11px; }
+  .foot button { background:none; border:1px solid var(--line); color:var(--muted); border-radius:9px; padding:6px 10px; font-size:11px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div>
+      <div class="name" id="name">加载中…</div>
+      <div class="code" id="code">—</div>
+    </div>
+    <div class="chg" id="chg"></div>
+  </div>
+
+  <div class="big">
+    <div class="total" id="total">—</div>
+    <div class="grade" id="grade"></div>
+  </div>
+  <div class="tags" id="tags"></div>
+
+  <div class="rows" id="rows"></div>
+
+  <div class="barrow">
+    <input id="input" inputmode="numeric" placeholder="输入代码 / 名称">
+    <button id="go">切换</button>
+  </div>
+  <div class="foot">
+    <span id="status">连接中…</span>
+    <button id="refresh">刷新</button>
+  </div>
+</div>
+
+<script>
+const DIMS = [["turnover","换手"],["volume","量能"],["kdj","KDJ"],["relpos","位置"],["boll_extreme","布林"],["resistance","压力"],["fundamental","基本面"]];
+const COLORS = v => v==null?'#5d6f88':v>=85?'#34d399':v>=75?'#22d3ee':v>=60?'#fbbf24':v>=45?'#fb923c':'#f87171';
+const GRADE = v => v==null?'数据不足':v>=85?'重点跟踪':v>=75?'观察':v>=60?'中性偏多':v>=45?'偏弱':'回避';
+const $ = s => document.querySelector(s);
+
+const params = new URLSearchParams(location.search);
+let code = params.get('code') || localStorage.getItem('sc_code') || '600519';
+let timer = null;
+
+function setStatus(t){ $('#status').textContent = t; }
+
+async function getJSON(url){
+  const r = await fetch(url);
+  const d = await r.json().catch(()=>({}));
+  if (!r.ok || d.ok === false) throw new Error(d.error || ('HTTP '+r.status));
+  return d;
+}
+async function postJSON(url, body){
+  const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  const d = await r.json().catch(()=>({}));
+  if (!r.ok || d.ok === false) throw new Error(d.error || ('HTTP '+r.status));
+  return d;
+}
+
+async function load(force){
+  setStatus('刷新中…');
+  try {
+    let d;
+    try { d = await getJSON('/api/index?action=stock&code=' + encodeURIComponent(code)); }
+    catch (e) {
+      setStatus('同步行情…');
+      await postJSON('/api/index?action=sync', {codes:[code]});
+      d = await getJSON('/api/index?action=stock&code=' + encodeURIComponent(code));
+    }
+    render(d);
+    localStorage.setItem('sc_code', code);
+    setStatus('已更新 ' + new Date().toLocaleTimeString('zh-CN',{hour12:false}));
+  } catch (e) {
+    setStatus('失败：' + e.message);
+  }
+}
+
+function render(d){
+  const r = d.result;
+  code = r.code;
+  $('#name').textContent = r.name || r.code;
+  $('#code').textContent = `${r.code} · ${r.date} · ${r.close}`;
+  $('#total').textContent = r.total==null ? '—' : r.total.toFixed(1);
+  $('#total').style.color = COLORS(r.total);
+  $('#grade').textContent = GRADE(r.total);
+  $('#grade').style.color = COLORS(r.total);
+  $('#chg').textContent = '';
+
+  $('#tags').innerHTML = (r.tags||[]).map(t=>`<span class="tag">${t}</span>`).join('');
+
+  const map = {};
+  (r.dims||[]).forEach(x => map[x.key] = x.score);
+  $('#rows').innerHTML = DIMS.map(([k,label]) => {
+    const v = map[k];
+    return `<div class="row">
+      <span class="lbl">${label}</span>
+      <span class="bar"><i style="width:${v==null?0:Math.max(0,Math.min(100,v))}%;background:${COLORS(v)}"></i></span>
+      <span class="val" style="color:${COLORS(v)}">${v==null?'—':v.toFixed(0)}</span>
+    </div>`;
+  }).join('');
+}
+
+$('#go').addEventListener('click', async () => {
+  const t = $('#input').value.trim();
+  if (!t) return;
+  const m = t.match(/\d{6}/);
+  if (m) { code = m[0]; await load(); $('#input').value=''; return; }
+  // 名称 -> 代码
+  setStatus('查询代码…');
+  try {
+    const r = await fetch('/api/index?action=resolve&q=' + encodeURIComponent(t));
+    const d = await r.json();
+    const item = (d.QuotationCodeTable?.Data||[]).find(x=>x.Classify==='AStock');
+    if (item) { code = item.Code; $('#input').value=''; await load(); }
+    else setStatus('没找到这只股票');
+  } catch(e) { setStatus('查询失败'); }
+});
+
+$('#input').addEventListener('keydown', e => { if (e.key === 'Enter') $('#go').click(); });
+$('#refresh').addEventListener('click', () => load(true));
+
+document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
+
+load();
+timer = setInterval(() => { if (!document.hidden) load(); }, 30000);
+</script>
+</body>
+</html>
