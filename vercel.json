@@ -1,0 +1,8 @@
+{
+  "functions": {
+    "api/stockcheck.py": {
+      "runtime": "python3.12",
+      "maxDuration": 10
+    }
+  }
+}
